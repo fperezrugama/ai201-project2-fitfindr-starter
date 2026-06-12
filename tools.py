@@ -75,11 +75,26 @@ def search_listings(
         "an",
         "and",
         "for",
+        "find",
         "in",
+        "like",
+        "looking",
+        "need",
         "of",
+        "some",
         "the",
         "to",
+        "want",
         "with",
+    }
+    weak_style_terms = {
+        "2000s",
+        "90s",
+        "classic",
+        "retro",
+        "streetwear",
+        "vintage",
+        "y2k",
     }
 
     def normalize(value) -> str:
@@ -87,11 +102,6 @@ def search_listings(
 
     def tokenize(value) -> list[str]:
         return re.findall(r"[a-z0-9]+", normalize(value))
-
-    def list_text(value) -> str:
-        if isinstance(value, list):
-            return " ".join(str(item) for item in value)
-        return str(value or "")
 
     def size_matches(requested_size: str | None, listing_size) -> bool:
         if not requested_size or not str(requested_size).strip():
@@ -155,12 +165,20 @@ def search_listings(
     if not isinstance(listings, list):
         return []
 
-    query = normalize(description)
-    query_terms = {
+    query_tokens = [
         term for term in tokenize(description) if term not in stop_words
-    }
+    ]
+    query_terms = set(query_tokens)
     if not query_terms:
         return []
+    query = " ".join(query_tokens)
+    query_phrases = {
+        " ".join(query_tokens[start:end])
+        for start in range(len(query_tokens))
+        for end in range(start + 2, len(query_tokens) + 1)
+    }
+    important_terms = query_terms - weak_style_terms
+    requires_strong_match = len(query_terms) > 1
 
     try:
         price_limit = float(max_price) if max_price is not None else None
@@ -180,37 +198,119 @@ def search_listings(
         if not size_matches(size, listing.get("size")):
             continue
 
-        title = normalize(listing.get("title"))
-        item_description = normalize(listing.get("description"))
-        category = normalize(listing.get("category"))
-        style_tags = normalize(list_text(listing.get("style_tags")))
-        colors = normalize(list_text(listing.get("colors")))
-        brand = normalize(listing.get("brand"))
+        style_tag_values = listing.get("style_tags") or []
+        color_values = listing.get("colors") or []
+        if not isinstance(style_tag_values, list):
+            style_tag_values = [style_tag_values]
+        if not isinstance(color_values, list):
+            color_values = [color_values]
+
+        title = " ".join(tokenize(listing.get("title")))
+        item_description = " ".join(tokenize(listing.get("description")))
+        category = " ".join(tokenize(listing.get("category")))
+        style_tag_phrases = [
+            " ".join(tokenize(tag)) for tag in style_tag_values
+        ]
+        color_phrases = [
+            " ".join(tokenize(color)) for color in color_values
+        ]
+        brand = " ".join(tokenize(listing.get("brand")))
+        style_tags = " ".join(style_tag_phrases)
+        colors = " ".join(color_phrases)
+        metadata = " ".join([category, style_tags, colors, brand])
 
         title_tokens = set(tokenize(title))
         description_tokens = set(tokenize(item_description))
-        metadata_tokens = set(
-            tokenize(" ".join([category, style_tags, colors, brand]))
+        style_tag_tokens = set(tokenize(style_tags))
+        metadata_tokens = set(tokenize(metadata))
+        all_tokens = title_tokens | description_tokens | metadata_tokens
+        matched_terms = query_terms & all_tokens
+        multi_word_style_tag_matches = {
+            tag for tag in style_tag_phrases
+            if len(tokenize(tag)) > 1 and tag in query_phrases
+        }
+
+        full_query_in_title = bool(query and query in title)
+        full_query_in_description = bool(query and query in item_description)
+        full_query_in_style_tags = query in style_tag_phrases
+        title_phrase_matches = {
+            phrase for phrase in query_phrases if phrase in title
+        }
+        description_phrase_matches = {
+            phrase for phrase in query_phrases if phrase in item_description
+        }
+        style_tag_phrase_matches = {
+            phrase for phrase in query_phrases
+            if phrase in style_tag_phrases
+        }
+        exact_style_tag_matches = (
+            style_tag_phrase_matches | multi_word_style_tag_matches
+        )
+        strong_title_terms = (
+            (title_tokens & important_terms)
+            if important_terms
+            else (title_tokens & query_terms)
+        )
+        has_all_important_terms = bool(
+            important_terms and important_terms <= all_tokens
+        )
+        has_strong_match = any(
+            [
+                full_query_in_title,
+                full_query_in_description,
+                full_query_in_style_tags,
+                bool(title_phrase_matches),
+                bool(exact_style_tag_matches),
+                bool(strong_title_terms),
+                has_all_important_terms,
+            ]
         )
 
+        if not matched_terms:
+            continue
+        if requires_strong_match and not has_strong_match:
+            continue
+        if (
+            requires_strong_match
+            and important_terms
+            and matched_terms <= weak_style_terms
+        ):
+            continue
+
         score = 0
-        if query in title:
-            score += 8
-        if query in item_description:
-            score += 5
-        if query in " ".join([category, style_tags, colors, brand]):
-            score += 4
+        if full_query_in_title:
+            score += 60
+        if full_query_in_style_tags:
+            score += 54
+        if full_query_in_description:
+            score += 32
+
+        score += len(title_phrase_matches) * 42
+        score += len(exact_style_tag_matches) * 38
+        score += len(description_phrase_matches) * 16
+
+        if important_terms and important_terms <= title_tokens:
+            score += 36
+        if important_terms and important_terms <= style_tag_tokens:
+            score += 32
+        if important_terms and important_terms <= description_tokens:
+            score += 12
 
         for term in query_terms:
+            is_important_term = term in important_terms
             if term in title_tokens:
-                score += 3
+                score += 14 if is_important_term else 1
+            if term in style_tag_tokens:
+                score += 12 if is_important_term else 1
             if term in description_tokens:
-                score += 2
+                score += 5 if is_important_term else 0
             if term in metadata_tokens:
-                score += 2
+                score += 3 if is_important_term else 0
 
-        if query_terms <= (title_tokens | description_tokens | metadata_tokens):
-            score += 3
+        if has_all_important_terms:
+            score += 18
+        if query_terms <= all_tokens:
+            score += 6
 
         if score > 0:
             scored_listings.append((score, price, listing))
