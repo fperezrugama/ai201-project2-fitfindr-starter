@@ -5,6 +5,13 @@
 > Your planning.md will be reviewed as part of your submission.
 > Update it before starting any stretch features.
 
+Description of FitFindr:
+
+FitFindr helps users search for secondhand clothing items and understand how to style them with pieces from their existing wardrobe. When a user describes what they want, the agent first calls `search_listings(description, size, max_price)` to find matching listings from the mock dataset. If a listing is found, the selected item is stored in the session and passed to `suggest_outfit(new_item, wardrobe)`, then the outfit suggestion is passed to `create_fit_card(outfit, new_item)` to generate a short shareable caption.
+
+If `search_listings` returns no matches, the agent should stop before calling the outfit or fit card tools. It should explain that no matching listings were found and suggest loosening the search, such as increasing the budget, removing the size filter, or using a broader item description.
+
+
 ---
 
 ## Tools
