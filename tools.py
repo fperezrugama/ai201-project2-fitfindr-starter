@@ -352,8 +352,168 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    if (
+        not isinstance(new_item, dict)
+        or not new_item
+        or not any(
+            new_item.get(field)
+            for field in (
+                "title",
+                "name",
+                "category",
+                "description",
+                "style_tags",
+                "colors",
+            )
+        )
+    ):
+        return (
+            "I can't suggest an outfit because the selected thrift item is "
+            "missing or invalid. Please choose a valid listing first."
+        )
+
+    def clean_text(value, default: str = "unspecified") -> str:
+        if value is None:
+            return default
+        if isinstance(value, list):
+            cleaned_items = [
+                str(item).strip() for item in value if str(item).strip()
+            ]
+            return ", ".join(cleaned_items) if cleaned_items else default
+        text = str(value).strip()
+        return text if text else default
+
+    def item_name(item: dict) -> str:
+        return clean_text(
+            item.get("title") or item.get("name") or item.get("category"),
+            "the selected thrift item",
+        )
+
+    def format_listing(item: dict) -> str:
+        details = [
+            f"Title: {item_name(item)}",
+            f"Category: {clean_text(item.get('category'))}",
+            f"Brand: {clean_text(item.get('brand'))}",
+            f"Colors: {clean_text(item.get('colors'))}",
+            f"Style tags: {clean_text(item.get('style_tags'))}",
+            f"Description: {clean_text(item.get('description'))}",
+        ]
+        if item.get("price") is not None:
+            details.append(f"Price: ${item.get('price')}")
+        if item.get("platform") is not None:
+            details.append(f"Platform: {item.get('platform')}")
+        return "\n".join(details)
+
+    def format_wardrobe_item(item: dict) -> str:
+        return (
+            f"- {item_name(item)} "
+            f"({clean_text(item.get('category'))}; "
+            f"colors: {clean_text(item.get('colors'))}; "
+            f"style: {clean_text(item.get('style_tags'))}; "
+            f"notes: {clean_text(item.get('notes'))})"
+        )
+
+    def valid_wardrobe_items(wardrobe_data) -> list[dict]:
+        if not isinstance(wardrobe_data, dict):
+            return []
+        items = wardrobe_data.get("items")
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict) and item]
+
+    def pick_wardrobe_piece(items: list[dict]) -> dict | None:
+        category = clean_text(new_item.get("category"), "").lower()
+        category_preferences = {
+            "tops": ["bottoms", "shoes", "outerwear", "accessories"],
+            "bottoms": ["tops", "shoes", "outerwear", "accessories"],
+            "outerwear": ["tops", "bottoms", "shoes", "accessories"],
+            "shoes": ["bottoms", "tops", "outerwear", "accessories"],
+            "accessories": ["tops", "bottoms", "shoes", "outerwear"],
+        }
+        for preferred_category in category_preferences.get(category, []):
+            for item in items:
+                item_category = clean_text(item.get("category"), "").lower()
+                if item_category == preferred_category:
+                    return item
+        return items[0] if items else None
+
+    def fallback_suggestion(items: list[dict]) -> str:
+        thrift_item = item_name(new_item)
+        item_styles = clean_text(new_item.get("style_tags"), "")
+        aesthetic = item_styles if item_styles else "secondhand"
+        wardrobe_piece = pick_wardrobe_piece(items)
+
+        if wardrobe_piece:
+            piece_name = item_name(wardrobe_piece)
+            return (
+                f"Style {thrift_item} with your {piece_name} for a cohesive "
+                f"{aesthetic} outfit. Add a simple base layer or neutral shoe "
+                "so the thrifted piece stays central. For a practical finish, "
+                "balance the silhouette by tucking or cuffing one piece if the "
+                "outfit starts to feel too loose."
+            )
+
+        colors = clean_text(new_item.get("colors"), "its main colors")
+        return (
+            f"Build a {aesthetic} outfit around {thrift_item} by pairing it "
+            f"with simple basics that echo {colors}. Keep the rest of the look "
+            "easy, like denim, a clean jacket, or everyday sneakers. For a "
+            "practical styling tip, balance the proportions with a tuck, cuff, "
+            "or fitted layer."
+        )
+
+    wardrobe_items = valid_wardrobe_items(wardrobe)
+    selected_item_text = format_listing(new_item)
+    if wardrobe_items:
+        wardrobe_text = "\n".join(
+            format_wardrobe_item(item) for item in wardrobe_items
+        )
+        user_prompt = f"""
+Selected thrift item:
+{selected_item_text}
+
+Available wardrobe pieces:
+{wardrobe_text}
+
+Suggest one complete outfit using the selected thrift item and compatible
+wardrobe pieces. Mention the selected thrift item, at least one wardrobe
+piece by name, the overall aesthetic, and one practical styling tip such as
+layering, cuffing, tucking, color balance, or shoe choice. Keep it concise:
+3 to 5 sentences.
+"""
+    else:
+        user_prompt = f"""
+Selected thrift item:
+{selected_item_text}
+
+The user's wardrobe is empty or unavailable. Suggest useful general styling
+advice for this item. Mention the selected thrift item, the overall aesthetic,
+and one practical styling tip such as layering, cuffing, tucking, color
+balance, or shoe choice. Keep it concise: 3 to 5 sentences.
+"""
+
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are FitFindr, a concise secondhand-fashion "
+                        "stylist. Return one practical outfit suggestion in "
+                        "3 to 5 sentences."
+                    ),
+                },
+                {"role": "user", "content": user_prompt.strip()},
+            ],
+            temperature=0.7,
+            max_tokens=220,
+        )
+        suggestion = response.choices[0].message.content.strip()
+        return suggestion or fallback_suggestion(wardrobe_items)
+    except Exception:
+        return fallback_suggestion(wardrobe_items)
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
