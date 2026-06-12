@@ -545,5 +545,120 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    outfit_error = (
+        "I need a complete outfit suggestion before I can create a fit card."
+    )
+
+    if not isinstance(outfit, str):
+        return outfit_error
+
+    outfit_text = outfit.strip()
+    if (
+        not outfit_text
+        or outfit_text.lower() in {"none", "null", "n/a", "na"}
+        or len(outfit_text.split()) < 5
+    ):
+        return outfit_error
+
+    if not isinstance(new_item, dict) or not new_item:
+        return (
+            "I need a valid selected listing before I can create a fit card."
+        )
+
+    def clean_text(value, default: str = "") -> str:
+        if value is None:
+            return default
+        if isinstance(value, list):
+            cleaned_items = [
+                str(item).strip() for item in value if str(item).strip()
+            ]
+            return ", ".join(cleaned_items) if cleaned_items else default
+        text = str(value).strip()
+        return text if text else default
+
+    item_title = clean_text(new_item.get("title") or new_item.get("name"))
+    item_context = [
+        clean_text(new_item.get("category")),
+        clean_text(new_item.get("description")),
+        clean_text(new_item.get("style_tags")),
+        clean_text(new_item.get("colors")),
+        clean_text(new_item.get("brand")),
+    ]
+    if not item_title or not any(item_context):
+        return (
+            "I need a valid selected listing with item details before I can "
+            "create a fit card."
+        )
+
+    def format_price(value) -> str:
+        if value is None or value == "":
+            return ""
+        try:
+            return f"${float(value):.2f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return str(value).strip()
+
+    def fallback_caption() -> str:
+        price = format_price(new_item.get("price"))
+        platform = clean_text(new_item.get("platform"))
+        aesthetic = clean_text(new_item.get("style_tags"), "secondhand")
+        source_parts = []
+        if price:
+            source_parts.append(price)
+        if platform:
+            source_parts.append(f"on {platform}")
+        source_text = f" ({' '.join(source_parts)})" if source_parts else ""
+        return (
+            f"{item_title}{source_text} pulls the whole outfit into a "
+            f"{aesthetic} vibe without feeling too styled. The fit feels "
+            "casual and lived-in, with the thrifted piece doing the main work."
+        )
+
+    selected_item_text = "\n".join(
+        [
+            f"Title: {item_title}",
+            f"Category: {clean_text(new_item.get('category'), 'unspecified')}",
+            f"Brand: {clean_text(new_item.get('brand'), 'unspecified')}",
+            f"Colors: {clean_text(new_item.get('colors'), 'unspecified')}",
+            f"Style tags: {clean_text(new_item.get('style_tags'), 'unspecified')}",
+            f"Price: {format_price(new_item.get('price')) or 'unspecified'}",
+            f"Platform: {clean_text(new_item.get('platform'), 'unspecified')}",
+            f"Description: {clean_text(new_item.get('description'), 'unspecified')}",
+        ]
+    )
+
+    prompt = f"""
+Selected thrift item:
+{selected_item_text}
+
+Outfit suggestion:
+{outfit_text}
+
+Create one short social-media-style outfit caption. Keep it to 1 to 3
+sentences. Mention the thrifted item naturally, mention the price or platform
+when available, and capture the vibe of the outfit. Do not write a product
+description, bullet list, title, or hashtags.
+"""
+
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are FitFindr, a casual secondhand-fashion "
+                        "caption writer. Write concise, natural social "
+                        "captions that sound like a real outfit post."
+                    ),
+                },
+                {"role": "user", "content": prompt.strip()},
+            ],
+            temperature=0.9,
+            max_tokens=140,
+        )
+        caption = response.choices[0].message.content.strip()
+        return caption or fallback_caption()
+    except Exception:
+        return fallback_caption()
