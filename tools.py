@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -69,8 +70,159 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "for",
+        "in",
+        "of",
+        "the",
+        "to",
+        "with",
+    }
+
+    def normalize(value) -> str:
+        return str(value or "").lower()
+
+    def tokenize(value) -> list[str]:
+        return re.findall(r"[a-z0-9]+", normalize(value))
+
+    def list_text(value) -> str:
+        if isinstance(value, list):
+            return " ".join(str(item) for item in value)
+        return str(value or "")
+
+    def size_matches(requested_size: str | None, listing_size) -> bool:
+        if not requested_size or not str(requested_size).strip():
+            return True
+
+        requested_tokens = set(tokenize(requested_size))
+        listing_tokens = set(tokenize(listing_size))
+        if not requested_tokens or not listing_tokens:
+            return False
+
+        def canonical_sizes(value) -> set[str]:
+            value_text = normalize(value).replace("-", " ")
+            tokens = set(tokenize(value_text))
+            phrase_matches = set()
+            if re.search(r"\b(extra|x)\s*small\b", value_text):
+                phrase_matches.add("xs")
+            if re.search(r"\b(extra|x)\s*large\b", value_text):
+                phrase_matches.add("xl")
+            if phrase_matches:
+                return phrase_matches
+
+            token_map = {
+                "xs": "xs",
+                "xsmall": "xs",
+                "s": "s",
+                "small": "s",
+                "m": "m",
+                "medium": "m",
+                "med": "m",
+                "l": "l",
+                "large": "l",
+                "xl": "xl",
+                "xlarge": "xl",
+                "xxl": "xxl",
+                "2xl": "xxl",
+                "xxlarge": "xxl",
+            }
+            return {
+                token_map[token]
+                for token in tokens
+                if token in token_map
+            }
+
+        requested_canonical_sizes = canonical_sizes(requested_size)
+        listing_canonical_sizes = canonical_sizes(listing_size)
+        if requested_canonical_sizes and listing_canonical_sizes:
+            return bool(requested_canonical_sizes & listing_canonical_sizes)
+
+        if requested_tokens <= listing_tokens:
+            return True
+
+        requested_digits = set(re.findall(r"\d+", normalize(requested_size)))
+        listing_digits = set(re.findall(r"\d+", normalize(listing_size)))
+        return bool(requested_digits and requested_digits <= listing_digits)
+
+    try:
+        listings = load_listings()
+    except Exception:
+        return []
+
+    if not isinstance(listings, list):
+        return []
+
+    query = normalize(description)
+    query_terms = {
+        term for term in tokenize(description) if term not in stop_words
+    }
+    if not query_terms:
+        return []
+
+    try:
+        price_limit = float(max_price) if max_price is not None else None
+    except (TypeError, ValueError):
+        return []
+
+    scored_listings = []
+    for listing in listings:
+        try:
+            price = float(listing.get("price", 0))
+        except (TypeError, ValueError, AttributeError):
+            price = float("inf")
+
+        if price_limit is not None and price > price_limit:
+            continue
+
+        if not size_matches(size, listing.get("size")):
+            continue
+
+        title = normalize(listing.get("title"))
+        item_description = normalize(listing.get("description"))
+        category = normalize(listing.get("category"))
+        style_tags = normalize(list_text(listing.get("style_tags")))
+        colors = normalize(list_text(listing.get("colors")))
+        brand = normalize(listing.get("brand"))
+
+        title_tokens = set(tokenize(title))
+        description_tokens = set(tokenize(item_description))
+        metadata_tokens = set(
+            tokenize(" ".join([category, style_tags, colors, brand]))
+        )
+
+        score = 0
+        if query in title:
+            score += 8
+        if query in item_description:
+            score += 5
+        if query in " ".join([category, style_tags, colors, brand]):
+            score += 4
+
+        for term in query_terms:
+            if term in title_tokens:
+                score += 3
+            if term in description_tokens:
+                score += 2
+            if term in metadata_tokens:
+                score += 2
+
+        if query_terms <= (title_tokens | description_tokens | metadata_tokens):
+            score += 3
+
+        if score > 0:
+            scored_listings.append((score, price, listing))
+
+    scored_listings.sort(
+        key=lambda match: (
+            -match[0],
+            match[1],
+            normalize(match[2].get("title")),
+        )
+    )
+    return [listing for _, _, listing in scored_listings]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
