@@ -12,6 +12,7 @@ Tools:
     create_fit_card(outfit, new_item)               → str
 """
 
+import json
 import os
 import re
 
@@ -21,6 +22,18 @@ from groq import Groq
 from utils.data_loader import load_listings
 
 load_dotenv()
+
+
+_STYLE_PROFILE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "data",
+    "style_profile.json",
+)
+_DEFAULT_STYLE_PROFILE = {
+    "favorite_styles": [],
+    "preferred_colors": [],
+    "fit_preferences": [],
+}
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────
@@ -33,6 +46,42 @@ def _get_groq_client():
             "GROQ_API_KEY not set. Add it to a .env file in the project root."
         )
     return Groq(api_key=api_key)
+
+
+# ── Style profile memory helpers ──────────────────────────────────────────────
+
+def load_style_profile() -> dict:
+    """Load saved style preferences, or return an empty profile if missing."""
+    if not os.path.exists(_STYLE_PROFILE_PATH):
+        return {key: value.copy() for key, value in _DEFAULT_STYLE_PROFILE.items()}
+
+    with open(_STYLE_PROFILE_PATH, "r", encoding="utf-8") as profile_file:
+        profile = json.load(profile_file)
+
+    if not isinstance(profile, dict):
+        raise ValueError("Style profile must be a dictionary.")
+
+    normalized_profile = {}
+    for key, default_value in _DEFAULT_STYLE_PROFILE.items():
+        value = profile.get(key, default_value)
+        normalized_profile[key] = value if isinstance(value, list) else []
+
+    return normalized_profile
+
+
+def save_style_profile(profile: dict) -> None:
+    """Save style preferences to the project data directory."""
+    if not isinstance(profile, dict):
+        raise ValueError("Style profile must be a dictionary.")
+
+    normalized_profile = {}
+    for key, default_value in _DEFAULT_STYLE_PROFILE.items():
+        value = profile.get(key, default_value)
+        normalized_profile[key] = value if isinstance(value, list) else []
+
+    with open(_STYLE_PROFILE_PATH, "w", encoding="utf-8") as profile_file:
+        json.dump(normalized_profile, profile_file, indent=2)
+        profile_file.write("\n")
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
@@ -421,6 +470,28 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
             return []
         return [item for item in items if isinstance(item, dict) and item]
 
+    def format_style_profile(wardrobe_data) -> str:
+        if not isinstance(wardrobe_data, dict):
+            return ""
+        profile = wardrobe_data.get("style_profile")
+        if not isinstance(profile, dict):
+            return ""
+
+        profile_lines = []
+        profile_fields = [
+            ("favorite_styles", "Favorite styles"),
+            ("preferred_colors", "Preferred colors"),
+            ("fit_preferences", "Fit preferences"),
+        ]
+        for key, label in profile_fields:
+            value = clean_text(profile.get(key), "")
+            if value:
+                profile_lines.append(f"{label}: {value}")
+
+        if not profile_lines:
+            return ""
+        return "Saved style profile:\n" + "\n".join(profile_lines)
+
     def pick_wardrobe_piece(items: list[dict]) -> dict | None:
         category = clean_text(new_item.get("category"), "").lower()
         category_preferences = {
@@ -464,6 +535,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     wardrobe_items = valid_wardrobe_items(wardrobe)
     selected_item_text = format_listing(new_item)
+    style_profile_text = format_style_profile(wardrobe)
     if wardrobe_items:
         wardrobe_text = "\n".join(
             format_wardrobe_item(item) for item in wardrobe_items
@@ -475,6 +547,8 @@ Selected thrift item:
 Available wardrobe pieces:
 {wardrobe_text}
 
+{style_profile_text}
+
 Suggest one complete outfit using the selected thrift item and compatible
 wardrobe pieces. Mention the selected thrift item, at least one wardrobe
 piece by name, the overall aesthetic, and one practical styling tip such as
@@ -485,6 +559,8 @@ layering, cuffing, tucking, color balance, or shoe choice. Keep it concise:
         user_prompt = f"""
 Selected thrift item:
 {selected_item_text}
+
+{style_profile_text}
 
 The user's wardrobe is empty or unavailable. Suggest useful general styling
 advice for this item. Mention the selected thrift item, the overall aesthetic,
@@ -662,3 +738,145 @@ description, bullet list, title, or hashtags.
         return caption or fallback_caption()
     except Exception:
         return fallback_caption()
+
+
+# ── Stretch Tool: compare_price ───────────────────────────────────────────────
+
+def compare_price(new_item: dict, search_results: list[dict]) -> str:
+    """
+    Compare the selected listing price with similar listings from the current
+    search results and return a short low/fair/high assessment.
+    """
+    limited_message = (
+        "Price comparison is limited because there are not enough comparable "
+        "listings with valid prices."
+    )
+
+    def normalize(value) -> str:
+        return str(value or "").lower().strip()
+
+    def tokenize(value) -> set[str]:
+        stop_words = {
+            "a",
+            "an",
+            "and",
+            "for",
+            "in",
+            "of",
+            "the",
+            "to",
+            "with",
+        }
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", normalize(value))
+            if token not in stop_words
+        }
+
+    def value_set(value) -> set[str]:
+        if isinstance(value, list):
+            return {
+                normalize(item)
+                for item in value
+                if normalize(item)
+            }
+        normalized = normalize(value)
+        return {normalized} if normalized else set()
+
+    def get_price(item: dict) -> float | None:
+        try:
+            price = float(item.get("price"))
+        except (TypeError, ValueError, AttributeError):
+            return None
+        return price if price >= 0 else None
+
+    def format_price(price: float) -> str:
+        return f"${price:.2f}".rstrip("0").rstrip(".")
+
+    if not isinstance(new_item, dict) or not new_item:
+        return "Price comparison is limited because the selected item is invalid."
+
+    selected_price = get_price(new_item)
+    if selected_price is None:
+        return (
+            "Price comparison is limited because the selected item is missing "
+            "a valid price."
+        )
+
+    if not isinstance(search_results, list):
+        return limited_message
+
+    selected_id = normalize(new_item.get("id"))
+    selected_category = normalize(new_item.get("category"))
+    selected_styles = value_set(new_item.get("style_tags"))
+    selected_colors = value_set(new_item.get("colors"))
+    selected_title_words = tokenize(new_item.get("title"))
+
+    comparable_prices = []
+    for listing in search_results:
+        if not isinstance(listing, dict) or not listing:
+            continue
+        if listing is new_item:
+            continue
+        if selected_id and normalize(listing.get("id")) == selected_id:
+            continue
+
+        listing_price = get_price(listing)
+        if listing_price is None:
+            continue
+
+        listing_category = normalize(listing.get("category"))
+        listing_styles = value_set(listing.get("style_tags"))
+        listing_colors = value_set(listing.get("colors"))
+        listing_title_words = tokenize(listing.get("title"))
+
+        has_category_match = (
+            bool(selected_category)
+            and selected_category == listing_category
+        )
+        has_style_match = bool(selected_styles & listing_styles)
+        has_color_match = bool(selected_colors & listing_colors)
+        has_title_match = bool(selected_title_words & listing_title_words)
+
+        if any(
+            [
+                has_category_match,
+                has_style_match,
+                has_color_match,
+                has_title_match,
+            ]
+        ):
+            comparable_prices.append(listing_price)
+
+    if len(comparable_prices) < 2:
+        return limited_message
+
+    comparable_prices.sort()
+    middle = len(comparable_prices) // 2
+    if len(comparable_prices) % 2 == 0:
+        typical_price = (
+            comparable_prices[middle - 1] + comparable_prices[middle]
+        ) / 2
+    else:
+        typical_price = comparable_prices[middle]
+
+    if selected_price <= typical_price * 0.85:
+        assessment = "low"
+    elif selected_price >= typical_price * 1.15:
+        assessment = "high"
+    else:
+        assessment = "fair"
+
+    price_range = (
+        f"{format_price(comparable_prices[0])}-"
+        f"{format_price(comparable_prices[-1])}"
+    )
+    item_name = (
+        new_item.get("title")
+        or new_item.get("name")
+        or "This item"
+    )
+    return (
+        f"{item_name} at {format_price(selected_price)} looks {assessment} "
+        f"compared with similar listings in the {price_range} range."
+    )

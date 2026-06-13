@@ -20,7 +20,14 @@ Usage (once implemented):
 
 import re
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import (
+    search_listings,
+    suggest_outfit,
+    create_fit_card,
+    compare_price,
+    load_style_profile,
+    save_style_profile,
+)
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -44,6 +51,13 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
         "fallback_message": None,    # set if the search retries with looser filters
+        "price_comparison": None,    # string returned by compare_price
+        "style_profile": {
+            "favorite_styles": [],
+            "preferred_colors": [],
+            "fit_preferences": [],
+        },
+        "style_memory_error": None,  # warning if profile load/save fails
         "error": None,               # set if the interaction ended early
     }
 
@@ -133,8 +147,84 @@ def run_agent(
             "max_price": max_price,
         }
 
+    def add_unique_values(profile: dict, key: str, values) -> None:
+        if not isinstance(values, list):
+            values = [values]
+        existing_values = profile.setdefault(key, [])
+        existing_normalized = {
+            str(value).strip().lower()
+            for value in existing_values
+            if str(value).strip()
+        }
+        for value in values:
+            cleaned_value = str(value).strip()
+            if cleaned_value and cleaned_value.lower() not in existing_normalized:
+                existing_values.append(cleaned_value)
+                existing_normalized.add(cleaned_value.lower())
+
+    def update_style_profile(profile: dict, selected_item: dict) -> dict:
+        updated_profile = {
+            "favorite_styles": list(profile.get("favorite_styles", [])),
+            "preferred_colors": list(profile.get("preferred_colors", [])),
+            "fit_preferences": list(profile.get("fit_preferences", [])),
+        }
+        add_unique_values(
+            updated_profile,
+            "favorite_styles",
+            selected_item.get("style_tags", []),
+        )
+        add_unique_values(
+            updated_profile,
+            "preferred_colors",
+            selected_item.get("colors", []),
+        )
+
+        fit_words = {"oversized", "baggy", "fitted", "cropped", "wide-leg"}
+        item_text = " ".join(
+            str(selected_item.get(field, ""))
+            for field in ("title", "description", "size")
+        ).lower()
+        style_text = " ".join(
+            str(tag) for tag in selected_item.get("style_tags", [])
+        ).lower()
+        found_fit_words = [
+            fit_word
+            for fit_word in fit_words
+            if fit_word in item_text or fit_word in style_text
+        ]
+        add_unique_values(
+            updated_profile,
+            "fit_preferences",
+            found_fit_words,
+        )
+        return updated_profile
+
     session = _new_session(query, wardrobe)
     session["parsed"] = parse_query(query)
+
+    try:
+        session["style_profile"] = load_style_profile()
+    except Exception:
+        session["style_profile"] = {
+            "favorite_styles": [],
+            "preferred_colors": [],
+            "fit_preferences": [],
+        }
+        session["style_memory_error"] = (
+            "Style profile could not be loaded, so I continued without saved "
+            "preferences."
+        )
+
+    if isinstance(session["wardrobe"], dict):
+        session["wardrobe"] = {
+            **session["wardrobe"],
+            "style_profile": session["style_profile"],
+        }
+    else:
+        session["wardrobe"] = {
+            "items": [],
+            "style_profile": session["style_profile"],
+        }
 
     size = size if size is not None else session["parsed"]["size"]
     max_price = (
@@ -170,6 +260,17 @@ def run_agent(
         return session
 
     session["selected_item"] = session["search_results"][0]
+    try:
+        session["price_comparison"] = compare_price(
+            new_item=session["selected_item"],
+            search_results=session["search_results"],
+        )
+    except Exception:
+        session["price_comparison"] = (
+            "Price comparison is limited because something went wrong while "
+            "comparing similar listings."
+        )
+
     session["outfit_suggestion"] = suggest_outfit(
         new_item=session["selected_item"],
         wardrobe=session["wardrobe"],
@@ -191,6 +292,18 @@ def run_agent(
         outfit=session["outfit_suggestion"],
         new_item=session["selected_item"],
     )
+
+    try:
+        session["style_profile"] = update_style_profile(
+            session["style_profile"],
+            session["selected_item"],
+        )
+        save_style_profile(session["style_profile"])
+    except Exception:
+        session["style_memory_error"] = (
+            "Style profile could not be saved, but the outfit flow completed."
+        )
+
     return session
 
 

@@ -84,18 +84,23 @@ def handle_query(
         return session["error"], "", ""
 
     selected_item = session.get("selected_item") or {}
+    listing_lines = [
+        f"Title: {selected_item.get('title', 'Unknown item')}",
+        f"Brand: {selected_item.get('brand') or 'Unknown'}",
+        f"Category: {selected_item.get('category', 'Unknown')}",
+        f"Size: {selected_item.get('size', 'Unknown')}",
+        f"Condition: {selected_item.get('condition', 'Unknown')}",
+        f"Price: ${selected_item.get('price', 'Unknown')}",
+        f"Platform: {selected_item.get('platform', 'Unknown')}",
+        f"Colors: {', '.join(selected_item.get('colors') or [])}",
+        f"Style tags: {', '.join(selected_item.get('style_tags') or [])}",
+    ]
+    price_comparison = session.get("price_comparison")
+    if price_comparison:
+        listing_lines.extend(["", f"Price comparison: {price_comparison}"])
+
     listing_text = "\n".join(
-        [
-            f"Title: {selected_item.get('title', 'Unknown item')}",
-            f"Brand: {selected_item.get('brand') or 'Unknown'}",
-            f"Category: {selected_item.get('category', 'Unknown')}",
-            f"Size: {selected_item.get('size', 'Unknown')}",
-            f"Condition: {selected_item.get('condition', 'Unknown')}",
-            f"Price: ${selected_item.get('price', 'Unknown')}",
-            f"Platform: {selected_item.get('platform', 'Unknown')}",
-            f"Colors: {', '.join(selected_item.get('colors') or [])}",
-            f"Style tags: {', '.join(selected_item.get('style_tags') or [])}",
-        ]
+        listing_lines
     )
 
     return (
