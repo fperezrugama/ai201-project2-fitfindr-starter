@@ -106,13 +106,148 @@ If the outfit input is empty or the selected item is missing, the tool should re
 ### Additional Tools (if any)
 
 <!-- Copy the block above for any tools beyond the required three -->
-Stretch tools will be added after the required agent works correctly.
+Stretch tools and stretch planning behavior will be added only after the
+required Milestone 3 and Milestone 4 flow works correctly. Do not add trend
+awareness yet.
 
-Planned stretch features:
+### Stretch 1: Retry logic with fallback
 
-Retry logic with fallback: If search_listings returns no results, the agent can retry with loosened constraints, such as removing the size filter or increasing the max price.
-Price comparison tool: A future compare_price(new_item, listings) tool can compare the selected item's price with similar listings in the dataset and estimate whether the price is low, fair, or high.
-Style profile memory: A future memory feature can save the user's style preferences or wardrobe across sessions.
+**What it does:**
+Retry logic gives the agent one extra chance to find listings when the first
+call to `search_listings` returns `[]`. The retry uses loosened constraints,
+such as removing the size filter while keeping the same query and max price.
+If the retry succeeds, the agent continues the normal workflow and tells the
+user that it loosened the search.
+
+**Input parameters:**
+- `query` (str): The original user search request.
+- `size` (str or None): The original size filter. This is the main constraint
+  to loosen on retry.
+- `max_price` (float or None): The original price ceiling.
+- `wardrobe` (dict): The user's wardrobe, unchanged by the retry.
+
+**What it returns:**
+This is planning-loop behavior rather than a standalone tool. It returns the
+same session dictionary as `run_agent()`, with either retry results stored in
+`session["search_results"]` or a final no-results error.
+
+**What happens if it fails or returns nothing:**
+If the retry also returns `[]`, the agent stores a clear no-results message in
+`session["error"]`, keeps `selected_item`, `outfit_suggestion`, and `fit_card`
+as `None`, and returns early. It should not call `suggest_outfit` or
+`create_fit_card`.
+
+**How it changes the planning loop:**
+The initial call remains:
+
+search_listings(description=query, size=size, max_price=max_price)
+
+If that returns `[]`, the agent retries once with loosened constraints:
+
+search_listings(description=query, size=None, max_price=max_price)
+
+If the retry returns results, the agent stores those results, selects the top
+item, and continues to `suggest_outfit` and `create_fit_card`. If the retry
+does not return results, the agent stops.
+
+**New session keys:**
+- `fallback_message` (str or None): Message explaining what constraint was
+  loosened, such as "No exact size match found, so I retried without the size
+  filter."
+- `retry_attempted` (bool): Whether the agent performed the fallback search.
+- `retry_params` (dict or None): The loosened search parameters used for the
+  retry, such as `{"size": None, "max_price": 30.0}`.
+
+### Stretch 2: compare_price
+
+**What it does:**
+`compare_price(new_item, search_results)` compares the selected listing's price
+against similar listings from the current search results. It returns a short
+string saying whether the selected item seems low, fair, or high compared with
+similar secondhand listings.
+
+**Input parameters:**
+- `new_item` (dict): The selected listing stored in `session["selected_item"]`.
+- `search_results` (list[dict]): The list returned by `search_listings`.
+
+**What it returns:**
+Returns a string price evaluation.
+
+Example return:
+"This $24 graphic tee looks fair compared with similar listings, which are
+mostly in the $18-$30 range."
+
+**What happens if it fails or returns nothing:**
+If there are not enough similar listings, or if prices are missing or invalid,
+the tool returns a helpful message instead of crashing, such as:
+"I do not have enough similar listings to compare this price confidently."
+
+**How it changes the planning loop:**
+After the agent stores `session["selected_item"]`, it calls:
+
+compare_price(
+    new_item=session["selected_item"],
+    search_results=session["search_results"]
+)
+
+The result is stored before or alongside the outfit suggestion. The agent can
+still continue to `suggest_outfit` and `create_fit_card` if price comparison is
+unavailable, because price comparison is helpful context rather than a required
+step.
+
+**New session keys:**
+- `price_comparison` (str or None): The low/fair/high price assessment.
+- `price_comparison_error` (str or None): Optional message if comparison could
+  not be completed.
+
+### Stretch 3: Style profile memory
+
+**What it does:**
+Style profile memory stores simple user preferences across sessions in a JSON
+file. The profile can include favorite styles, preferred colors, and fit
+preferences. It should personalize outfit suggestions without replacing the
+wardrobe as the main source of outfit pieces.
+
+**Input parameters:**
+- `profile_path` (str): Path to the JSON file where preferences are stored.
+- `query` (str): The current user request, used as a light signal for style
+  preferences.
+- `selected_item` (dict or None): The selected listing, used to infer simple
+  preferences after a successful search.
+- `wardrobe` (dict): The user's wardrobe dictionary.
+- `profile_updates` (dict or None): Optional explicit updates, such as
+  `{"favorite_styles": ["grunge"], "preferred_colors": ["black"]}`.
+
+**What it returns:**
+Returns a style profile dictionary loaded from or saved to JSON.
+
+Example return:
+{
+    "favorite_styles": ["vintage", "streetwear"],
+    "preferred_colors": ["black", "indigo"],
+    "fit_preferences": ["oversized", "baggy"]
+}
+
+**What happens if it fails or returns nothing:**
+If the JSON file is missing, the agent starts with an empty profile. If the
+file is unreadable or invalid JSON, the agent ignores it for the current run,
+stores a memory warning in the session, and continues without crashing.
+
+**How it changes the planning loop:**
+At the start of `run_agent`, the agent loads the style profile and stores it in
+the session. Before calling `suggest_outfit`, the planning loop includes the
+profile as additional context, either by adding it to the wardrobe context or by
+passing it through an updated prompt. After a successful interaction, the agent
+can update the JSON profile with simple preferences from the selected item and
+user query.
+
+**New session keys:**
+- `style_profile` (dict): The loaded user style profile for the current run.
+- `style_profile_path` (str): The JSON file path used for profile memory.
+- `style_profile_updated` (bool): Whether the profile was updated after the
+  interaction.
+- `style_memory_error` (str or None): Optional warning if profile loading or
+  saving failed.
 
 ---
 
