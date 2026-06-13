@@ -4,10 +4,14 @@
     "vintage",
     "grunge",
     "streetwear",
-    "band tee"
+    "band tee",
+    "90s",
+    "athletic"
   ],
   "preferred_colors": [
-    "black"
+    "black",
+    "navy",
+    "white"
   ],
   "fit_preferences": []
 }
