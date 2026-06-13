@@ -43,6 +43,7 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "wardrobe": wardrobe,        # user's wardrobe dict
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
+        "fallback_message": None,    # set if the search retries with looser filters
         "error": None,               # set if the interaction ended early
     }
 
@@ -147,6 +148,16 @@ def run_agent(
         size=size,
         max_price=max_price,
     )
+
+    if not session["search_results"]:
+        session["fallback_message"] = (
+            "No exact matches found, so I retried without the size filter."
+        )
+        session["search_results"] = search_listings(
+            description=query,
+            size=None,
+            max_price=max_price,
+        )
 
     if not session["search_results"]:
         session["error"] = (
