@@ -20,7 +20,12 @@ from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
 
 # ── query handler ─────────────────────────────────────────────────────────────
 
-def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
+def handle_query(
+    user_query: str,
+    wardrobe_choice: str,
+    size_input: str | None = None,
+    max_price_input: str | None = None,
+) -> tuple[str, str, str]:
     """
     Called by Gradio when the user submits a query.
 
@@ -43,8 +48,61 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
            string and return it along with session["outfit_suggestion"] and
            session["fit_card"].
     """
-    # TODO: implement this function
-    return "Agent not yet implemented.", "", ""
+    query = str(user_query or "").strip()
+    if not query:
+        return "Please enter a search query first.", "", ""
+
+    wardrobe_options = {"Example wardrobe", "Empty wardrobe (new user)"}
+    if wardrobe_choice not in wardrobe_options and max_price_input in wardrobe_options:
+        size_input, max_price_input, wardrobe_choice = (
+            wardrobe_choice,
+            size_input,
+            max_price_input,
+        )
+
+    size = str(size_input or "").strip() or None
+
+    max_price_text = str(max_price_input or "").strip()
+    try:
+        max_price = float(max_price_text) if max_price_text else None
+    except ValueError:
+        max_price = None
+
+    if wardrobe_choice == "Empty wardrobe (new user)":
+        wardrobe = get_empty_wardrobe()
+    else:
+        wardrobe = get_example_wardrobe()
+
+    session = run_agent(
+        query=query,
+        size=size,
+        max_price=max_price,
+        wardrobe=wardrobe,
+    )
+
+    if session.get("error"):
+        return session["error"], "", ""
+
+    selected_item = session.get("selected_item") or {}
+    listing_text = "\n".join(
+        [
+            f"Title: {selected_item.get('title', 'Unknown item')}",
+            f"Brand: {selected_item.get('brand') or 'Unknown'}",
+            f"Category: {selected_item.get('category', 'Unknown')}",
+            f"Size: {selected_item.get('size', 'Unknown')}",
+            f"Condition: {selected_item.get('condition', 'Unknown')}",
+            f"Price: ${selected_item.get('price', 'Unknown')}",
+            f"Platform: {selected_item.get('platform', 'Unknown')}",
+            f"Colors: {', '.join(selected_item.get('colors') or [])}",
+            f"Style tags: {', '.join(selected_item.get('style_tags') or [])}",
+        ]
+    )
+
+    return (
+        listing_text,
+        session.get("outfit_suggestion") or "",
+        session.get("fit_card") or "",
+    )
 
 
 # ── interface ─────────────────────────────────────────────────────────────────
