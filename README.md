@@ -128,6 +128,39 @@ The workflow is:
 
 This planning loop ensures that the agent responds dynamically to different situations. For example, if no listing is found, the agent does not call `suggest_outfit()` or `create_fit_card()`. Instead, it returns a helpful error message explaining what the user can try next.
 
+## Agent Decision-Making
+
+FitFindr uses a planning loop that decides which tool to call based on the current session state.
+
+### Why `search_listings()` is called first
+
+The agent cannot generate an outfit or fit card until it has a real clothing item to work with. For this reason, the first step is always to search the listings dataset using the user's query, size preference, and budget.
+
+### Why `compare_price()` is called next
+
+Once a listing has been selected, the agent has enough information to evaluate whether the item's price is reasonable compared with similar listings. This tool is only called if a valid item exists.
+
+### Why `suggest_outfit()` is called next
+
+After a listing is selected, the agent combines information from the selected item, the user's wardrobe, and any saved style preferences to generate a complete outfit recommendation.
+
+### Why `create_fit_card()` is called last
+
+The fit card depends on the outfit suggestion generated in the previous step. Because of this dependency, the agent only calls `create_fit_card()` after a valid outfit suggestion exists.
+
+### When the workflow changes
+
+The agent does not always call every tool.
+
+If `search_listings()` returns no results:
+
+1. The agent retries once without the size filter.
+2. If results are still not found, it stores an error message.
+3. The workflow stops immediately.
+4. `suggest_outfit()` and `create_fit_card()` are never called.
+
+This behavior prevents the agent from generating outfits or captions for items that do not exist.
+
 ## State Management
 
 The agent uses a session dictionary to pass information between tools and maintain context throughout a user interaction.
